@@ -338,11 +338,14 @@ def remove_pruning_from_model_torch(module, config):
         if isinstance(layer, CompressedLayerLinear):
             if config["pruning_parameters"]["pruning_method"] == "pdp":  # Find better solution later
                 if config["training_parameters"]["pruning_first"]:
-                    weight = layer.pruning_layer.get_hard_mask(layer.weight) * layer.weight
+                    weight = layer.weight
+                    if layer.enable_pruning:
+                        weight = layer.pruning_layer.get_hard_mask(weight) * weight
                     weight, bias = layer.quantize(weight, layer.bias)
                 else:
                     weight, bias = layer.quantize(layer.weight, layer.bias)
-                    weight = layer.pruning_layer.get_hard_mask(weight) * weight
+                    if layer.enable_pruning:
+                        weight = layer.pruning_layer.get_hard_mask(weight) * weight
             else:
                 weight, bias = layer.prune_and_quantize(layer.weight, layer.bias)
             out_features = layer.out_features
@@ -356,11 +359,14 @@ def remove_pruning_from_model_torch(module, config):
         elif isinstance(layer, (CompressedLayerConv2d, CompressedLayerConv1d)):
             if config["pruning_parameters"]["pruning_method"] == "pdp":  # Find better solution later
                 if config["training_parameters"]["pruning_first"]:
-                    weight = layer.pruning_layer.get_hard_mask(layer.weight) * layer.weight
+                    weight = layer.weight
+                    if layer.enable_pruning:
+                        weight = layer.pruning_layer.get_hard_mask(weight) * weight
                     weight, bias = layer.quantize(weight, layer.bias)
                 else:
                     weight, bias = layer.quantize(layer.weight, layer.bias)
-                    weight = layer.pruning_layer.get_hard_mask(weight) * weight
+                    if layer.enable_pruning:
+                        weight = layer.pruning_layer.get_hard_mask(weight) * weight
             else:
                 weight, bias = layer.prune_and_quantize(layer.weight, layer.bias)
             bias_values = bias
@@ -481,14 +487,17 @@ def get_layer_keep_ratio_torch(model):
     for layer in model.modules():
         if isinstance(layer, (CompressedLayerConv2d, CompressedLayerConv1d, CompressedLayerLinear)):
             if layer.pruning_first:
-                weight = layer.pruning_layer.get_hard_mask(layer.weight) * layer.weight
+                weight = layer.weight
+                if layer.enable_pruning:
+                    weight = layer.pruning_layer.get_hard_mask(weight) * weight
                 weight, bias = layer.quantize(weight, layer.bias)
                 total_w += weight.numel()
                 rem = torch.count_nonzero(weight)
                 remaining_weights += rem
             else:
                 weight, bias = layer.quantize(layer.weight, layer.bias)
-                weight = layer.pruning_layer.get_hard_mask(weight) * weight
+                if layer.enable_pruning:
+                    weight = layer.pruning_layer.get_hard_mask(weight) * weight
                 total_w += weight.numel()
                 rem = torch.count_nonzero(weight)
                 remaining_weights += rem
