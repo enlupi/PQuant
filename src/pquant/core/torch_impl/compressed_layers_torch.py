@@ -7,7 +7,8 @@ from torch.fx import symbolic_trace
 
 from pquant.core.activations_quantizer import QuantizedReLU, QuantizedTanh
 from pquant.core.utils import get_pruning_layer
-
+#torch.fx.wrap("QuantizedReLU")
+#torch.fx.wrap("QuantizedTanh")
 
 class CompressedLayerBase(nn.Module):
     def __init__(self, config, layer, layer_type):
@@ -20,8 +21,8 @@ class CompressedLayerBase(nn.Module):
         self.weight = nn.Parameter(layer.weight.clone())
         self.pruning_layer = get_pruning_layer(config=config, layer_type=layer_type)
         self.pruning_method = config["pruning_parameters"]["pruning_method"]
-        overflow = "SAT_SYM" if config["quantization_parameters"]["use_symmetric_quantization"] else "SAT"
-        self.quantizer = get_fixed_quantizer(overflow_mode=overflow)
+        self.overflow = "SAT_SYM" if config["quantization_parameters"]["use_symmetric_quantization"] else "SAT"
+        self.quantizer = get_fixed_quantizer(round_mode='RND', overflow_mode=self.overflow)
         self.hgq_heterogeneous = config["quantization_parameters"]["hgq_heterogeneous"]
         if config["quantization_parameters"]["use_high_granularity_quantization"]:
             if self.hgq_heterogeneous:
@@ -30,7 +31,7 @@ class CompressedLayerBase(nn.Module):
                     i0=self.i_weight,
                     f0=self.f_weight,
                     round_mode="RND",
-                    overflow_mode=overflow,
+                    overflow_mode=self.overflow,
                     q_type="kif",
                     homogeneous_axis=(),
                 )
@@ -41,7 +42,7 @@ class CompressedLayerBase(nn.Module):
                         i0=self.i_bias,
                         f0=self.f_bias,
                         round_mode="RND",
-                        overflow_mode=overflow,
+                        overflow_mode=self.overflow,
                         q_type="kif",
                         homogeneous_axis=(),
                     )
@@ -52,7 +53,7 @@ class CompressedLayerBase(nn.Module):
                     i0=self.i_weight,
                     f0=self.f_weight,
                     round_mode="RND",
-                    overflow_mode=overflow,
+                    overflow_mode=self.overflow,
                     q_type="kif",
                     heterogeneous_axis=(),
                 )
@@ -63,7 +64,7 @@ class CompressedLayerBase(nn.Module):
                         i0=self.i_bias,
                         f0=self.f_bias,
                         round_mode="RND",
-                        overflow_mode=overflow,
+                        overflow_mode=self.overflow,
                         q_type="kif",
                         heterogeneous_axis=(),
                     )
@@ -237,6 +238,14 @@ def add_layer_specific_quantization_to_model(module, config):
     return module
 
 
+class QuantizedActivationTorchWrapper(torch.nn.Module):
+    def __init__(self, activation):
+        super().__init__()
+        self.activation = activation
+
+    def forward(self, x):
+        return self.activation(x)
+
 def add_quantized_activations_to_model_layer(module, config):
     if not config["quantization_parameters"]["enable_quantization"]:
         return module
@@ -252,12 +261,12 @@ def add_quantized_activations_to_model_layer(module, config):
                 # For ReLU, if using default values, add 1 bit since values are unsigned.
                 # Otherwise user provides bits. TODO: Find better way to do this
                 f = config["quantization_parameters"]["default_fractional_bits"] + 1
-            relu = QuantizedReLU(config, i=i, f=f)
+            relu = QuantizedActivationTorchWrapper(QuantizedReLU(config, i=i, f=f))
             setattr(module, name, relu)
         elif layer.__class__ in [nn.Tanh]:
             if name in config["quantization_parameters"]["layer_specific"]:
                 f = config["quantization_parameters"]["layer_specific"][name]["fractional_bits"]
-            tanh = QuantizedTanh(config, i=i, f=f)
+            tanh = QuantizedActivationTorchWrapper(QuantizedTanh(config, i=i, f=f))
             setattr(module, name, tanh)
         else:
             layer = add_quantized_activations_to_model_layer(layer, config)
