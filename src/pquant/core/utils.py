@@ -6,9 +6,9 @@ from pquant.pruning_methods.activation_pruning import ActivationPruning
 from pquant.pruning_methods.autosparse import AutoSparse
 from pquant.pruning_methods.cs import ContinuousSparsification
 from pquant.pruning_methods.dst import DST
+from pquant.pruning_methods.mdmm import MDMM
 from pquant.pruning_methods.pdp import PDP
 from pquant.pruning_methods.wanda import Wanda
-from pquant.pruning_methods.mdmm import MDMM
 
 
 def get_pruning_layer(config, layer_type):
