@@ -6,11 +6,18 @@ from pquant.core.quantizer_functions import create_quantizer
 
 
 class QuantizedTanh(keras.layers.Layer):
-    def __init__(self, config, i, f):
+    def __init__(
+        self, config, i_input=0.0, f_input=7.0, i_output=0.0, f_output=7.0, quantize_input=True, quantize_output=True
+    ):
         super().__init__()
-        self.i = convert_to_tensor(i)
-        self.f = convert_to_tensor(f)
+        self.i_input = convert_to_tensor(i_input)
+        self.f_input = convert_to_tensor(f_input)
         self.k = convert_to_tensor(1.0)
+
+        self.i_output = convert_to_tensor(i_output)
+        self.f_output = convert_to_tensor(f_output)
+        self.k = convert_to_tensor(1.0)
+
         self.config = config
         self.use_hgq = config["quantization_parameters"]["use_high_granularity_quantization"]
         self.is_pretraining = True
@@ -18,13 +25,15 @@ class QuantizedTanh(keras.layers.Layer):
         self.overflow = config["quantization_parameters"]["overflow"]
         self.use_real_tanh = config["quantization_parameters"]["use_real_tanh"]
         self.hgq_heterogeneous = config["quantization_parameters"]["hgq_heterogeneous"]
+        self.quantize_input = quantize_input
+        self.quantize_output = quantize_output
 
     def build(self, input_shape):
         super().build(input_shape)
-        self.quantizer = create_quantizer(
+        self.output_quantizer = create_quantizer(
             k=self.k,
-            i=self.i,
-            f=self.f,
+            i=self.i_output,
+            f=self.f_output,
             overflow=self.overflow,
             round_mode=self.round_mode,
             is_data=True,
@@ -32,19 +41,16 @@ class QuantizedTanh(keras.layers.Layer):
         )
         self.input_quantizer = create_quantizer(
             k=self.k,
-            i=self.i,
-            f=self.f,
+            i=self.i_input,
+            f=self.f_input,
             overflow=self.overflow,
             round_mode=self.round_mode,
             is_data=True,
             is_heterogeneous=self.use_hgq,
         )
         if self.use_hgq:
-            self.quantizer.build(input_shape)
-
-    def set_bits(self, i, f):
-        self.i = convert_to_tensor(i)
-        self.f = convert_to_tensor(f)
+            self.input_quantizer.build(input_shape)
+            self.output_quantizer.build(input_shape)
 
     def hgq_loss(self):
         if self.is_pretraining:
@@ -56,23 +62,41 @@ class QuantizedTanh(keras.layers.Layer):
     def post_pre_train_function(self):
         self.is_pretraining = False
 
+    def pre_activation(self, x):
+        if self.quantize_input:
+            if self.use_hgq:
+                x = self.input_quantizer(x)
+            else:
+                x = self.input_quantizer(x, k=self.k, i=self.i_input, f=self.f_input)
+        return x
+
+    def post_activation(self, x):
+        if self.quantize_output:
+            if self.use_hgq:
+                return self.output_quantizer(x)
+            else:
+                return self.output_quantizer(x, k=self.k, i=self.i_input, f=self.f_output)
+        return x
+
     def call(self, x):
-        if self.use_hgq:
-            x = self.input_quantizer(x)
-        else:
-            x = self.input_quantizer(x, k=self.k, i=self.i, f=self.f)
+        x = self.pre_activation(x)
         x = tanh(x) if self.use_real_tanh else hard_tanh(x)
-        if self.use_hgq:
-            return self.quantizer(x)
-        return self.quantizer(x, k=self.k, i=self.i, f=self.f)
+        x = self.post_activation(x)
+        return x
 
 
 class QuantizedReLU(keras.layers.Layer):
-    def __init__(self, config, i, f):
+    def __init__(
+        self, config, i_input=0.0, f_input=8.0, i_output=0.0, f_output=8.0, quantize_input=True, quantize_output=True
+    ):
         super().__init__()
         self.config = config
-        self.i = convert_to_tensor(i)
-        self.f = convert_to_tensor(f)
+        self.i_input = convert_to_tensor(i_input)
+        self.f_input = convert_to_tensor(f_input)
+        self.k = convert_to_tensor(0.0)
+
+        self.i_output = convert_to_tensor(i_output)
+        self.f_output = convert_to_tensor(f_output)
         self.k = convert_to_tensor(0.0)
         self.use_hgq = config["quantization_parameters"]["use_high_granularity_quantization"]
         self.is_pretraining = True
@@ -83,27 +107,35 @@ class QuantizedReLU(keras.layers.Layer):
         self.use_fitcompress = config["fitcompress_parameters"]["enable_fitcompress"]
         self.post_fitcompress_calibration = False
         self.saved_inputs = []
+        self.quantize_input = quantize_input
+        self.quantize_output = quantize_output
 
     def build(self, input_shape):
         super().build(input_shape)
-        self.quantizer = create_quantizer(
+        self.output_quantizer = create_quantizer(
             k=self.k,
-            i=self.i,
-            f=self.f,
+            i=self.i_output,
+            f=self.f_output,
+            overflow=self.overflow,
+            round_mode=self.round_mode,
+            is_data=True,
+            is_heterogeneous=self.use_hgq,
+        )
+        self.input_quantizer = create_quantizer(
+            k=self.k,
+            i=self.i_input,
+            f=self.f_input,
             overflow=self.overflow,
             round_mode=self.round_mode,
             is_data=True,
             is_heterogeneous=self.use_hgq,
         )
         if self.use_hgq:
-            self.quantizer.build(input_shape)
+            self.input_quantizer.build(input_shape)
+            self.output_quantizer.build(input_shape)
 
         if self.use_multiplier:
             self.multiplier = self.add_weight(shape=(1,), trainable=True, initializer=keras.initializers.Constant(-1.0))
-
-    def set_bits(self, i, f):
-        self.i = convert_to_tensor(i)
-        self.f = convert_to_tensor(f)
 
     def post_pre_train_function(self):
         self.is_pretraining = False
@@ -115,6 +147,24 @@ class QuantizedReLU(keras.layers.Layer):
             "hgq_gamma"
         ]
 
+    def pre_activation(self, x):
+        if self.quantize_input:
+            if self.use_hgq:
+                x = self.input_quantizer(x)
+            else:
+                x = self.input_quantizer(x, k=self.k, i=self.i_input, f=self.f_input)
+        if self.use_multiplier:
+            x = x * 2 ** (ops.stop_gradient(ops.round(self.multiplier) - self.multiplier) + self.multiplier)
+        return x
+
+    def post_activation(self, x):
+        if self.quantize_output:
+            if self.use_hgq:
+                return self.output_quantizer(x)
+            else:
+                return self.output_quantizer(x, k=self.k, i=self.i_input, f=self.f_output)
+        return x
+
     def call(self, x):
         if self.use_fitcompress and self.is_pretraining:
             if self.post_fitcompress_calibration:
@@ -123,11 +173,10 @@ class QuantizedReLU(keras.layers.Layer):
             # During FITcompress, we do not use any quantized activations
             return ops.relu(x)
         # Multiplier after fitcompress if condition, such that we don't use any relu multiplier during FITcompress search
-        if self.use_multiplier:
-            x = x * 2 ** (ops.stop_gradient(ops.round(self.multiplier) - self.multiplier) + self.multiplier)
-        if self.use_hgq:
-            return self.quantizer(x)
-        return self.quantizer(x, k=self.k, i=self.i, f=self.f)
+        x = self.pre_activation(x)
+        x = ops.relu(x)
+        x = self.post_activation(x)
+        return x
 
 
 def hard_sigmoid(x):
